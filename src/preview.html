@@ -199,6 +199,23 @@
   .scroller { min-height: 0; overflow: auto; background: var(--surface); }
   /* A click anywhere in a pane opens its editor, not only on the text. */
   .scroller:not(.editing) { cursor: text; }
+  /*
+   * Scrollbars follow the host: a thin bar with no track and a capsule thumb,
+   * the same geometry MyPaste's own overlay uses. The system's classic
+   * scroller is a 15px block on a split view that can hold three of them.
+   */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--ink) 26%, transparent);
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in srgb, var(--ink) 40%, transparent);
+  }
   .rows {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -242,7 +259,9 @@
   /*
    * Edit mode (one click on either side). The edited side becomes one
    * textarea spanning the column, kept alive while the other side re-renders
-   * against it; the two panes scroll independently.
+   * against it; the two panes are separate scroll boxes whose positions the
+   * page keeps mirrored, since reading a comparison means seeing the same
+   * region on both sides at once.
    */
   .scroller.editing { overflow: hidden; }
   .rows.editing {

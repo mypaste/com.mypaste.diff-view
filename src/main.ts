@@ -4,7 +4,8 @@
  * 文档不联网、不读取其它条目，也不调用宿主的扩展。
  *
  * 单击任一侧的面板即进入该侧编辑，光标落在点击处：该侧换成整列一个
- * textarea，另一侧继续显示高亮行并随输入重算。点标题、行号或最后一行以下
+ * textarea，另一侧继续显示高亮行并随输入重算。两列各自滚动，但位置始终
+ * 互为镜像，读者在任何一侧滚动都看到同一段文本。点标题、行号或最后一行以下
  * 的空白同样算作这一侧的编辑，只把光标放到该侧末尾；编辑中单击另一侧即
  * 切换编辑对象。Esc 先退出编辑，再按一次才关闭文档。页面自己画卡片的
  * 外框（manifest 的 surface.chrome: "page"），所以关闭按钮在标签条右端，
@@ -161,8 +162,48 @@ function updateActions(): void {
   copyButton.disabled = !enabled;
 }
 
+/**
+ * Edit mode holds two independent scroll boxes: the edited side is a textarea
+ * and the other side a rendered column. Reading a comparison means the same
+ * region stays in view on both, so a scroll in either pane is mirrored into
+ * the other. Rendered rows and wrapped text lines do not map one-to-one (the
+ * column carries a gutter, and diff rows pad the other side's insertions), so
+ * the shared fraction of each box's scroll range is the honest common
+ * denominator.
+ */
+function scrollFraction(element: HTMLElement): number {
+  const range = element.scrollHeight - element.clientHeight;
+  return range > 0 ? element.scrollTop / range : 0;
+}
+
+function scrollToFraction(element: HTMLElement, fraction: number): void {
+  const range = element.scrollHeight - element.clientHeight;
+  element.scrollTop = range > 0 ? Math.round(fraction * range) : 0;
+}
+
+/**
+ * The pane whose scrollTop a programmatic write last set. Writing it fires a
+ * scroll event on that pane too; without this guard the two panes would take
+ * turns echoing each other down to the end of the text.
+ */
+let scrollEcho: HTMLElement | null = null;
+
+function mirrorScroll(from: HTMLElement, to: HTMLElement): void {
+  if (scrollEcho === from) return;
+  scrollEcho = to;
+  scrollToFraction(to, scrollFraction(from));
+  requestAnimationFrame(() => {
+    if (scrollEcho === to) scrollEcho = null;
+  });
+}
+
 /** The read-only comparison. */
 function renderView(): void {
+  // Leaving the editor replaces two scrollers with one; the reader was
+  // looking at a region of the document, so the rebuilt comparison opens at
+  // the same fraction instead of back at the top.
+  const editor = rows.querySelector<HTMLTextAreaElement>('[data-role="editor"]');
+  const fraction = editor ? scrollFraction(editor) : 0;
   editing = null;
   document.body.classList.remove("editing");
   rows.classList.remove("editing");
@@ -173,6 +214,7 @@ function renderView(): void {
   const fragment = document.createDocumentFragment();
   for (const row of result.rows) fragment.append(rowElement(row));
   rows.replaceChildren(fragment);
+  if (fraction > 0) scrollToFraction(scroller, fraction);
   showStatus(result);
   updateActions();
 }
@@ -190,13 +232,15 @@ function repaintEdit(): void {
   stats.textContent = diffSummary(result);
   const column = rows.querySelector<HTMLElement>('[data-column="other"]');
   if (column) {
-    // Replacing the column's children resets its scroll; a reader who had
-    // scrolled down should stay where they were.
-    const savedScroll = column.scrollTop;
+    // Replacing the column's children resets its scroll. The editor is the
+    // pane being typed in and did not move, so it keeps leading: the rebuilt
+    // column goes back to the same region instead of the top.
+    const editor = rows.querySelector<HTMLTextAreaElement>('[data-role="editor"]');
+    const fraction = editor ? scrollFraction(editor) : 0;
     column.replaceChildren(
       columnFragment(result.rows, side === "before" ? "after" : "before"),
     );
-    column.scrollTop = savedScroll;
+    scrollToFraction(column, fraction);
   }
   showStatus(result);
   updateActions();
@@ -261,17 +305,23 @@ function renderEdit(caret?: number): void {
   other.dataset.side = otherSide;
   other.dataset.column = "other";
   other.append(columnFragment(result.rows, otherSide));
+  textarea.addEventListener(
+    "scroll",
+    () => mirrorScroll(textarea, other),
+    { passive: true },
+  );
+  other.addEventListener(
+    "scroll",
+    () => mirrorScroll(other, textarea),
+    { passive: true },
+  );
 
-  // The two-pane view may have been scrolled before the click; carry that
-  // position into the read-only column so the click does not jump the reader.
-  const savedScroll = scroller.scrollTop;
   document.body.classList.add("editing");
   rows.classList.add("editing");
   scroller.classList.add("editing");
   rows.replaceChildren(
     ...(side === "before" ? [editorPane, other] : [other, editorPane]),
   );
-  other.scrollTop = savedScroll;
   showStatus(result);
   updateActions();
 
@@ -291,6 +341,9 @@ function renderEdit(caret?: number): void {
     0,
     paddingTop + clickedLine * lineHeight - textarea.clientHeight / 3,
   );
+  // The read-only column had its own scroll position before the click; the
+  // editor's position now stands for the same region, so it leads.
+  scrollToFraction(other, scrollFraction(textarea));
 }
 
 function beginEdit(side: Side, caret?: number): void {
@@ -450,6 +503,9 @@ function sideAt(x: number): Side {
   return x < bounds.left + bounds.width / 2 ? "before" : "after";
 }
 
+/** Pixels at a pane's right edge that belong to its scrollbar, not its text. */
+const SCROLLBAR_EDGE = 10;
+
 /**
  * What a click asks for: the side it lands on and, when it lands on a rendered
  * line, the caret under the pointer. A click on the pane head, the gutter or
@@ -487,13 +543,13 @@ function editRequest(
     const column = target.closest<HTMLElement>(".diff-column");
     if (column) {
       const bounds = column.getBoundingClientRect();
-      if (event.clientX > bounds.right - 14) return null;
+      if (event.clientX > bounds.right - SCROLLBAR_EDGE) return null;
     }
     return { side: sideAt(event.clientX) };
   }
   // The vertical scrollbar belongs to the scroller; pressing it scrolls.
   const bounds = scroller.getBoundingClientRect();
-  if (event.clientX > bounds.right - 14) return null;
+  if (event.clientX > bounds.right - SCROLLBAR_EDGE) return null;
   return { side: sideAt(event.clientX) };
 }
 

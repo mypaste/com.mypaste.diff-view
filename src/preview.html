@@ -35,6 +35,8 @@
     /* One line box for every piece of the document — the highlighted rows,
        the editor and its gutter — so they can never drift apart. */
     --code-line: 20.625px;
+    /* The page's scrollbar, reserved beside both panes and the header. */
+    --scrollbar: 8px;
   }
   /*
    * The scheme comes from the host's theme message (D-1042): the frame's own
@@ -185,6 +187,9 @@
   .pane-heads {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    /* The scroller's bar takes width from the panes; syncPaneGutter measures it
+       onto --pane-gutter so the two halves meet on the same vertical line. */
+    padding-right: var(--pane-gutter, 0px);
     border-bottom: 1px solid var(--line);
     background: var(--surface);
   }
@@ -193,14 +198,13 @@
     align-items: baseline;
     gap: 6px;
     padding: 8px 12px;
-    border-right: 1px solid var(--line);
     color: var(--muted);
     font-size: 11px;
     white-space: nowrap;
     overflow: hidden;
     cursor: text;
   }
-  .pane-head:last-child { border-right: 0; }
+  .pane-head:last-child { border-left: 1px solid var(--line); }
   .pane-head strong {
     overflow: hidden;
     color: var(--ink);
@@ -210,7 +214,14 @@
     text-overflow: ellipsis;
   }
 
-  .scroller { min-height: 0; overflow: auto; background: var(--surface); }
+  .scroller {
+    min-height: 0;
+    overflow: auto;
+    /* The bar's width is always reserved, so the divider never shifts when a
+       short document grows past the viewport. */
+    scrollbar-gutter: stable;
+    background: var(--surface);
+  }
   /* A click anywhere in a pane opens its editor, not only on the text. */
   .scroller { cursor: text; }
   /*
@@ -218,7 +229,7 @@
    * the same geometry MyPaste's own overlay uses. The page keeps a single
    * scrollbar in both modes, so this is the only scroller on the surface.
    */
-  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar { width: var(--scrollbar); height: var(--scrollbar); }
   ::-webkit-scrollbar-track,
   ::-webkit-scrollbar-corner { background: transparent; }
   ::-webkit-scrollbar-thumb {
@@ -234,6 +245,22 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     align-content: start;
+    /* The divider belongs to the document, not to a cell: it runs from the
+       header to the foot whether or not a row has lines on both sides, and it
+       never moves when the page switches between reading and editing. */
+    position: relative;
+    min-height: 100%;
+  }
+  .rows::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    background: var(--line);
+    z-index: 1;
+    pointer-events: none;
   }
   .diff-row { display: contents; }
   .line {
@@ -243,11 +270,13 @@
     color: var(--ink);
     font: 12.5px var(--mono);
     line-height: var(--code-line);
+    tab-size: 2;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
-  .line.before { border-right: 1px solid var(--line); }
   .line-number {
+    position: relative;
+    z-index: 2;
     flex: none;
     width: 24px;
     color: var(--muted);
@@ -255,7 +284,8 @@
     text-align: right;
     user-select: none;
   }
-  .line-text { flex: 1; min-width: 0; }
+  /* Above the divider, so a rule never crosses a glyph. */
+  .line-text { position: relative; z-index: 2; flex: 1; min-width: 0; }
   .diff-row[data-kind="delete"] .line.before { background: var(--removed); }
   .diff-row[data-kind="insert"] .line.after { background: var(--added); }
   .diff-row[data-kind="change"] .line.before { background: var(--removed); }
@@ -274,36 +304,61 @@
 
   /*
    * Edit mode (one click on either side). The clicked side keeps the page's
-   * own layout: the same column of the same two-pane row, the same gutter
-   * numbers, the same padding and the same monospace rhythm, with a transparent
-   * textarea in place of the highlighted words. Only the highlighting is
-   * gone; nothing moves, nothing gets a background of its own, and the page
-   * keeps its one scrollbar. The other side re-renders against the editor.
+   * own layout: the same column of the same two-pane row, the same numbers,
+   * the same padding and the same monospace rhythm, with a transparent
+   * textarea laid over the rows that were already painted. Nothing moves,
+   * nothing gets a background of its own, and the page keeps its one
+   * scrollbar. The column that stays read-only keeps the exact rows it had,
+   * so its colours are the ones painted on load.
    */
-  .rows.editing { display: flex; align-items: flex-start; }
+  /* The same two equal columns as the read-only grid: the editor's own padding
+     must not widen its half, or the editor would sit 10px off the divider. */
+  .rows.editing {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
   .edit-side {
+    position: relative;
     display: flex;
     align-items: flex-start;
-    flex: 1 1 0;
     gap: 10px;
     min-width: 0;
     padding: 0 10px;
   }
-  .edit-side[data-side="before"],
-  .diff-column[data-side="before"] { border-right: 1px solid var(--line); }
-  /* The gutter mirrors .line-number exactly, down to the line box the rows
-     use, so the digits sit where the read-only column put them. */
+  /*
+   * The side being edited keeps the comparison's colours. Its own rows are
+   * painted once, underneath the transparent textarea: the bands and word
+   * washes are the ones already on screen, so a click changes nothing about
+   * them, and the editor's own text sits on the same line boxes.
+   */
+  .edit-shade {
+    position: absolute;
+    /* The pane's padding box is the whole column, so a band spans the pane
+       exactly as the read-only row's did; the rows inside bring their own
+       gutter and padding back. */
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+  .edit-shade .line { color: transparent; }
+  /* One more class than the side rules above, so the wash keeps its colour and
+     the glyphs under the editor stay invisible. */
+  .edit-shade .line .diff-mark { color: transparent; }
+  /*
+   * The number column's width and nothing else: the shade's own rows draw the
+   * digits, so a wrapped line keeps one number beside its first line instead
+   * of pushing every number below it out of step with the text.
+   */
   .edit-gutter {
+    position: relative;
+    z-index: 2;
     flex: none;
     width: 24px;
-    color: var(--muted);
-    font: 11px var(--mono);
-    line-height: var(--code-line);
-    text-align: right;
-    white-space: pre;
-    user-select: none;
   }
   .edit-input {
+    position: relative;
+    z-index: 2;
     flex: 1;
     min-width: 0;
     margin: 0;

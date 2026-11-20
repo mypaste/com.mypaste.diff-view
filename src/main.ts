@@ -129,6 +129,23 @@ function columnFragment(rowsIn: readonly DiffRow[], side: Side): DocumentFragmen
   return fragment;
 }
 
+/**
+ * The same side, one row per line that side actually has — the counterpart's
+ * insertions and deletions leave no line box here, so this lines up with the
+ * text the editor holds. Used as the editor's background.
+ */
+function sideFragment(rowsIn: readonly DiffRow[], side: Side): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  for (const row of rowsIn) {
+    if ((side === "before" ? row.beforeLine : row.afterLine) === null) continue;
+    const element = cell("diff-row");
+    element.dataset.kind = row.kind;
+    element.append(sideCell(row, side));
+    fragment.append(element);
+  }
+  return fragment;
+}
+
 function summaryText(): string {
   return `文本 · ${languageLabel(detectLanguage(afterText))}`;
 }
@@ -162,6 +179,18 @@ function updateActions(): void {
   copyButton.disabled = !enabled;
 }
 
+/**
+ * The header's two halves must meet on the panes' own vertical line. The
+ * panes sit inside the scroller, whose bar takes width away from them, so the
+ * header gives up exactly that measured width. It is measured rather than
+ * assumed because the engine decides whether a short document reserves the
+ * bar at all.
+ */
+function syncPaneGutter(): void {
+  const gutter = scroller.offsetWidth - scroller.clientWidth;
+  document.documentElement.style.setProperty("--pane-gutter", `${gutter}px`);
+}
+
 /** The read-only comparison. */
 function renderView(): void {
   editing = null;
@@ -172,6 +201,7 @@ function renderView(): void {
   const fragment = document.createDocumentFragment();
   for (const row of result.rows) fragment.append(rowElement(row));
   rows.replaceChildren(fragment);
+  syncPaneGutter();
   showStatus(result);
   updateActions();
 }
@@ -193,6 +223,9 @@ function repaintEdit(): void {
       columnFragment(result.rows, side === "before" ? "after" : "before"),
     );
   }
+  const shade = rows.querySelector<HTMLElement>(".edit-shade");
+  if (shade) shade.replaceChildren(sideFragment(result.rows, side));
+  syncPaneGutter();
   showStatus(result);
   updateActions();
 }
@@ -213,14 +246,6 @@ function scheduleRepaint(): void {
       ? Math.min(REPAINT_INTERVAL_MAX, Math.max(REPAINT_INTERVAL, spent * 2))
       : REPAINT_INTERVAL;
   }, wait);
-}
-
-/** The editor's gutter: one number per line, as the read-only column shows. */
-function gutterText(text: string): string {
-  const count = text.split("\n").length;
-  const numbers: string[] = [];
-  for (let line = 1; line <= count; line += 1) numbers.push(String(line));
-  return numbers.join("\n");
 }
 
 /**
@@ -251,6 +276,13 @@ function renderEdit(caret?: number): void {
 
   const editorPane = cell("edit-side");
   editorPane.dataset.side = side;
+  // The comparison's own colour stays under the editor: the shades are the
+  // rows this side had a moment ago, with their glyphs left to the textarea.
+  const shade = cell("edit-shade");
+  shade.setAttribute("aria-hidden", "true");
+  shade.append(sideFragment(result.rows, side));
+  // Only the number column's width: the digits are the shade's rows, so they
+  // share the text's wrapping.
   const gutter = cell("edit-gutter");
   gutter.dataset.role = "gutter";
   const textarea = document.createElement("textarea");
@@ -258,7 +290,6 @@ function renderEdit(caret?: number): void {
   textarea.dataset.role = "editor";
   textarea.spellcheck = false;
   textarea.value = side === "before" ? beforeText : afterText;
-  gutter.textContent = gutterText(textarea.value);
   textarea.setAttribute(
     "aria-label",
     side === "before" ? "编辑对比基准文本" : "编辑当前文本",
@@ -270,23 +301,40 @@ function renderEdit(caret?: number): void {
     languageLabelElement.textContent = summaryText();
     if (afterText.trim() === "") setStatus("当前文本为空，无法保存或复制");
     updateActions();
-    const numbers = gutterText(textarea.value);
-    if (gutter.textContent !== numbers) gutter.textContent = numbers;
     fitEditor(textarea);
     scheduleRepaint();
   });
-  editorPane.append(gutter, textarea);
+  editorPane.append(shade, gutter, textarea);
 
   const otherSide: Side = side === "before" ? "after" : "before";
   const other = cell("diff-column");
   other.dataset.side = otherSide;
   other.dataset.column = "other";
-  other.append(columnFragment(result.rows, otherSide));
+  if (rows.classList.contains("editing")) {
+    // Switching sides: the column kept from the first click is missing the
+    // side the editor held, so it is drawn again from the comparison on screen.
+    other.append(columnFragment(result.rows, otherSide));
+  } else {
+    // Entering edit: the read-only column keeps the exact rows it was painted
+    // with. Moving them changes no colour, no mark and no line box, so the
+    // click hands one column to the editor and leaves the other as it was.
+    for (const rowNode of [...rows.children]) {
+      rowNode.querySelector(`.line[data-side="${side}"]`)?.remove();
+      const kept = rowNode.querySelector(".line");
+      const number = kept?.querySelector(".line-number");
+      if (kept && number && !number.classList.contains("empty")) {
+        other.append(rowNode);
+      } else {
+        rowNode.remove();
+      }
+    }
+  }
 
   rows.classList.add("editing");
   rows.replaceChildren(
     ...(side === "before" ? [editorPane, other] : [other, editorPane]),
   );
+  syncPaneGutter();
   showStatus(result);
   updateActions();
 
@@ -541,6 +589,7 @@ copyButton.addEventListener("click", () => void copy());
 window.addEventListener("resize", () => {
   const editor = rows.querySelector<HTMLTextAreaElement>('[data-role="editor"]');
   if (editor) fitEditor(editor);
+  syncPaneGutter();
 });
 
 document.addEventListener("keydown", (event) => {

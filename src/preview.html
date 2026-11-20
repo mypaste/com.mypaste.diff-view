@@ -21,10 +21,20 @@
     --accent: var(--mp-accent, #a65d2e);
     --accent-ink: var(--mp-accent-ink, #fff8ef);
     --focus: color-mix(in srgb, var(--mp-accent, #a65d2e) 35%, transparent);
-    --added: color-mix(in srgb, var(--mp-success, #3f6b3a) 12%, transparent);
-    --removed: color-mix(in srgb, var(--mp-danger, #b4472c) 10%, transparent);
+    /* A changed line wears its own side's colour, and a changed word wears a
+       stronger wash of the same one: the two never borrow the accent, so the
+       red/green reading of a diff survives any theme. */
+    --added: color-mix(in srgb, var(--mp-success, #607d4c) 14%, transparent);
+    --removed: color-mix(in srgb, var(--mp-danger, #b65b36) 12%, transparent);
+    --added-mark: color-mix(in srgb, var(--mp-success, #607d4c) 24%, transparent);
+    --removed-mark: color-mix(in srgb, var(--mp-danger, #b65b36) 20%, transparent);
+    --added-ink: var(--mp-success-ink, #4a6638);
+    --removed-ink: var(--mp-danger-ink, #9f4629);
     --mark: color-mix(in srgb, var(--mp-accent, #a65d2e) 28%, transparent);
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    /* One line box for every piece of the document — the highlighted rows,
+       the editor and its gutter — so they can never drift apart. */
+    --code-line: 20.625px;
   }
   /*
    * The scheme comes from the host's theme message (D-1042): the frame's own
@@ -42,8 +52,12 @@
     --accent: var(--mp-accent, #e2955f);
     --accent-ink: var(--mp-accent-ink, #241a12);
     --focus: color-mix(in srgb, var(--mp-accent, #e2955f) 35%, transparent);
-    --added: color-mix(in srgb, var(--mp-success, #4f8a49) 18%, transparent);
-    --removed: color-mix(in srgb, var(--mp-danger, #d58a68) 12%, transparent);
+    --added: color-mix(in srgb, var(--mp-success, #93b277) 20%, transparent);
+    --removed: color-mix(in srgb, var(--mp-danger, #d58a68) 16%, transparent);
+    --added-mark: color-mix(in srgb, var(--mp-success, #93b277) 30%, transparent);
+    --removed-mark: color-mix(in srgb, var(--mp-danger, #d58a68) 26%, transparent);
+    --added-ink: var(--mp-success-ink, #b2cc96);
+    --removed-ink: var(--mp-danger-ink, #e4a484);
     --mark: color-mix(in srgb, var(--mp-accent, #e2955f) 34%, transparent);
   }
   * { box-sizing: border-box; }
@@ -198,11 +212,11 @@
 
   .scroller { min-height: 0; overflow: auto; background: var(--surface); }
   /* A click anywhere in a pane opens its editor, not only on the text. */
-  .scroller:not(.editing) { cursor: text; }
+  .scroller { cursor: text; }
   /*
    * Scrollbars follow the host: a thin bar with no track and a capsule thumb,
-   * the same geometry MyPaste's own overlay uses. The system's classic
-   * scroller is a 15px block on a split view that can hold three of them.
+   * the same geometry MyPaste's own overlay uses. The page keeps a single
+   * scrollbar in both modes, so this is the only scroller on the surface.
    */
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track,
@@ -227,7 +241,8 @@
     gap: 10px;
     padding: 0 10px;
     color: var(--ink);
-    font: 12.5px/1.65 var(--mono);
+    font: 12.5px var(--mono);
+    line-height: var(--code-line);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
@@ -245,11 +260,12 @@
   .diff-row[data-kind="insert"] .line.after { background: var(--added); }
   .diff-row[data-kind="change"] .line.before { background: var(--removed); }
   .diff-row[data-kind="change"] .line.after { background: var(--added); }
-  .diff-mark {
-    padding: 0 1px;
-    background: var(--mark);
-    color: inherit;
-  }
+  /* A changed word wears the stronger wash of its own side and that side's
+     ink: a deletion never borrows the accent's warm orange, and the text is
+     coloured like the band under it. No padding, so the word occupies exactly
+     the width it will have in the editor that replaces this column. */
+  .line.before .diff-mark { background: var(--removed-mark); color: var(--removed-ink); }
+  .line.after .diff-mark { background: var(--added-mark); color: var(--added-ink); }
   .empty-state {
     padding: 28px 18px;
     color: var(--muted);
@@ -257,49 +273,55 @@
   }
 
   /*
-   * Edit mode (one click on either side). The edited side becomes one
-   * textarea spanning the column, kept alive while the other side re-renders
-   * against it; the two panes are separate scroll boxes whose positions the
-   * page keeps mirrored, since reading a comparison means seeing the same
-   * region on both sides at once.
+   * Edit mode (one click on either side). The clicked side keeps the page's
+   * own layout: the same column of the same two-pane row, the same gutter
+   * numbers, the same padding and the same monospace rhythm, with a transparent
+   * textarea in place of the highlighted words. Only the highlighting is
+   * gone; nothing moves, nothing gets a background of its own, and the page
+   * keeps its one scrollbar. The other side re-renders against the editor.
    */
-  .scroller.editing { overflow: hidden; }
-  .rows.editing {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-auto-rows: minmax(0, 1fr);
-    height: 100%;
-    align-content: stretch;
-    align-items: stretch;
-  }
-  .rows.editing .diff-row { display: block; }
-  .rows.editing .line { height: 100%; }
-  .rows.editing .line.before { border-right: 0; }
+  .rows.editing { display: flex; align-items: flex-start; }
   .edit-side {
     display: flex;
+    align-items: flex-start;
+    flex: 1 1 0;
+    gap: 10px;
     min-width: 0;
-    min-height: 0;
-    overflow: hidden;
+    padding: 0 10px;
   }
   .edit-side[data-side="before"],
   .diff-column[data-side="before"] { border-right: 1px solid var(--line); }
+  /* The gutter mirrors .line-number exactly, down to the line box the rows
+     use, so the digits sit where the read-only column put them. */
+  .edit-gutter {
+    flex: none;
+    width: 24px;
+    color: var(--muted);
+    font: 11px var(--mono);
+    line-height: var(--code-line);
+    text-align: right;
+    white-space: pre;
+    user-select: none;
+  }
   .edit-input {
     flex: 1;
     min-width: 0;
-    min-height: 0;
     margin: 0;
-    padding: 10px 12px;
+    padding: 0;
     border: 0;
     outline: none;
-    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    background: transparent;
     color: var(--ink);
-    font: 12.5px/1.65 var(--mono);
+    font: 12.5px var(--mono);
+    line-height: var(--code-line);
     resize: none;
+    overflow: hidden;
     tab-size: 2;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
   .edit-input::selection { background: var(--mark); }
-  .diff-column { min-width: 0; min-height: 0; overflow: auto; }
+  .diff-column { flex: 1 1 0; min-width: 0; }
 
   /*
    * The status bar mirrors the code editor's footer: the comparison's own

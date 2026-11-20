@@ -3,11 +3,11 @@
  * （D-1040）。两份文本的逐行对齐与词级标记由本包自带的 diff 引擎完成；
  * 文档不联网、不读取其它条目，也不调用宿主的扩展。
  *
- * 单击任一侧的面板即进入该侧编辑，光标落在点击处：该侧换成整列一个
- * textarea，另一侧继续显示高亮行并随输入重算。两列各自滚动，但位置始终
- * 互为镜像，读者在任何一侧滚动都看到同一段文本。点标题、行号或最后一行以下
- * 的空白同样算作这一侧的编辑，只把光标放到该侧末尾；编辑中单击另一侧即
- * 切换编辑对象。Esc 先退出编辑，再按一次才关闭文档。页面自己画卡片的
+ * 单击任一侧的面板即进入该侧编辑，光标落在点击处：该侧在高亮列原来的位置
+ * 换成同字号、同行距、同行号槽的透明 textarea，另一侧继续显示高亮行并随
+ * 输入重算。页面不因此换底色，也不改版式，始终只有一条滚动条。点标题、行号
+ * 或最后一行以下的空白同样算作这一侧的编辑，只把光标放到该侧末尾；编辑中
+ * 单击另一侧即切换编辑对象。Esc 先退出编辑，再按一次才关闭文档。页面自己画卡片的
  * 外框（manifest 的 surface.chrome: "page"），所以关闭按钮在标签条右端，
  * 经桥的 close 请求交回宿主。
  */
@@ -162,59 +162,16 @@ function updateActions(): void {
   copyButton.disabled = !enabled;
 }
 
-/**
- * Edit mode holds two independent scroll boxes: the edited side is a textarea
- * and the other side a rendered column. Reading a comparison means the same
- * region stays in view on both, so a scroll in either pane is mirrored into
- * the other. Rendered rows and wrapped text lines do not map one-to-one (the
- * column carries a gutter, and diff rows pad the other side's insertions), so
- * the shared fraction of each box's scroll range is the honest common
- * denominator.
- */
-function scrollFraction(element: HTMLElement): number {
-  const range = element.scrollHeight - element.clientHeight;
-  return range > 0 ? element.scrollTop / range : 0;
-}
-
-function scrollToFraction(element: HTMLElement, fraction: number): void {
-  const range = element.scrollHeight - element.clientHeight;
-  element.scrollTop = range > 0 ? Math.round(fraction * range) : 0;
-}
-
-/**
- * The pane whose scrollTop a programmatic write last set. Writing it fires a
- * scroll event on that pane too; without this guard the two panes would take
- * turns echoing each other down to the end of the text.
- */
-let scrollEcho: HTMLElement | null = null;
-
-function mirrorScroll(from: HTMLElement, to: HTMLElement): void {
-  if (scrollEcho === from) return;
-  scrollEcho = to;
-  scrollToFraction(to, scrollFraction(from));
-  requestAnimationFrame(() => {
-    if (scrollEcho === to) scrollEcho = null;
-  });
-}
-
 /** The read-only comparison. */
 function renderView(): void {
-  // Leaving the editor replaces two scrollers with one; the reader was
-  // looking at a region of the document, so the rebuilt comparison opens at
-  // the same fraction instead of back at the top.
-  const editor = rows.querySelector<HTMLTextAreaElement>('[data-role="editor"]');
-  const fraction = editor ? scrollFraction(editor) : 0;
   editing = null;
-  document.body.classList.remove("editing");
   rows.classList.remove("editing");
-  scroller.classList.remove("editing");
   const result = diffText(beforeText, afterText);
   cachedResult = result;
   stats.textContent = diffSummary(result);
   const fragment = document.createDocumentFragment();
   for (const row of result.rows) fragment.append(rowElement(row));
   rows.replaceChildren(fragment);
-  if (fraction > 0) scrollToFraction(scroller, fraction);
   showStatus(result);
   updateActions();
 }
@@ -232,15 +189,9 @@ function repaintEdit(): void {
   stats.textContent = diffSummary(result);
   const column = rows.querySelector<HTMLElement>('[data-column="other"]');
   if (column) {
-    // Replacing the column's children resets its scroll. The editor is the
-    // pane being typed in and did not move, so it keeps leading: the rebuilt
-    // column goes back to the same region instead of the top.
-    const editor = rows.querySelector<HTMLTextAreaElement>('[data-role="editor"]');
-    const fraction = editor ? scrollFraction(editor) : 0;
     column.replaceChildren(
       columnFragment(result.rows, side === "before" ? "after" : "before"),
     );
-    scrollToFraction(column, fraction);
   }
   showStatus(result);
   updateActions();
@@ -264,10 +215,30 @@ function scheduleRepaint(): void {
   }, wait);
 }
 
+/** The editor's gutter: one number per line, as the read-only column shows. */
+function gutterText(text: string): string {
+  const count = text.split("\n").length;
+  const numbers: string[] = [];
+  for (let line = 1; line <= count; line += 1) numbers.push(String(line));
+  return numbers.join("\n");
+}
+
 /**
- * One side in edit mode: a plain textarea held across keystrokes. Rebuilding
- * it on every input would move the caret and drop the undo stack, so only the
- * other column is replaced while the user types.
+ * The editor grows with its text so nothing inside it scrolls of its own:
+ * the page keeps the single scrollbar it had before the click.
+ */
+function fitEditor(editor: HTMLTextAreaElement): void {
+  editor.style.height = "auto";
+  editor.style.height = `${editor.scrollHeight}px`;
+}
+
+/**
+ * One side in edit mode: a plain, transparent textarea held across
+ * keystrokes. Rebuilding it on every input would move the caret and drop the
+ * undo stack, so only the other column is replaced while the user types. The
+ * editor takes the place the highlighted column had — same padding, gutter,
+ * numbers and line rhythm — so the page does not move or change colour when
+ * it is clicked.
  */
 function renderEdit(caret?: number): void {
   const side = editing;
@@ -280,11 +251,14 @@ function renderEdit(caret?: number): void {
 
   const editorPane = cell("edit-side");
   editorPane.dataset.side = side;
+  const gutter = cell("edit-gutter");
+  gutter.dataset.role = "gutter";
   const textarea = document.createElement("textarea");
   textarea.className = "edit-input";
   textarea.dataset.role = "editor";
   textarea.spellcheck = false;
   textarea.value = side === "before" ? beforeText : afterText;
+  gutter.textContent = gutterText(textarea.value);
   textarea.setAttribute(
     "aria-label",
     side === "before" ? "编辑对比基准文本" : "编辑当前文本",
@@ -296,61 +270,41 @@ function renderEdit(caret?: number): void {
     languageLabelElement.textContent = summaryText();
     if (afterText.trim() === "") setStatus("当前文本为空，无法保存或复制");
     updateActions();
+    const numbers = gutterText(textarea.value);
+    if (gutter.textContent !== numbers) gutter.textContent = numbers;
+    fitEditor(textarea);
     scheduleRepaint();
   });
-  editorPane.append(textarea);
+  editorPane.append(gutter, textarea);
 
   const otherSide: Side = side === "before" ? "after" : "before";
   const other = cell("diff-column");
   other.dataset.side = otherSide;
   other.dataset.column = "other";
   other.append(columnFragment(result.rows, otherSide));
-  textarea.addEventListener(
-    "scroll",
-    () => mirrorScroll(textarea, other),
-    { passive: true },
-  );
-  other.addEventListener(
-    "scroll",
-    () => mirrorScroll(other, textarea),
-    { passive: true },
-  );
 
-  document.body.classList.add("editing");
   rows.classList.add("editing");
-  scroller.classList.add("editing");
   rows.replaceChildren(
     ...(side === "before" ? [editorPane, other] : [other, editorPane]),
   );
   showStatus(result);
   updateActions();
 
-  // The caret goes where the reader clicked; without one, to the end of the
-  // text, where someone arriving from the comparison most often wants to
-  // append.
+  // The editor occupies the column the click landed in, with the same line
+  // metrics, so the caret goes where the pointer was; without one, to the end
+  // of the text, where someone arriving from the comparison usually appends.
+  // preventScroll keeps focus from moving the page to the element's top.
+  fitEditor(textarea);
   const position = caret ?? textarea.value.length;
-  textarea.focus();
+  textarea.focus({ preventScroll: true });
   textarea.setSelectionRange(position, position);
-  // A freshly focused textarea is left scrolled to its end, which drops the
-  // reader somewhere else entirely; bring the clicked line back into view.
-  const style = getComputedStyle(textarea);
-  const lineHeight = Number.parseFloat(style.lineHeight) || 20;
-  const paddingTop = Number.parseFloat(style.paddingTop) || 0;
-  const clickedLine = textarea.value.slice(0, position).split("\n").length - 1;
-  textarea.scrollTop = Math.max(
-    0,
-    paddingTop + clickedLine * lineHeight - textarea.clientHeight / 3,
-  );
-  // The read-only column had its own scroll position before the click; the
-  // editor's position now stands for the same region, so it leads.
-  scrollToFraction(other, scrollFraction(textarea));
 }
 
 function beginEdit(side: Side, caret?: number): void {
   if (editing === side) {
     const editor = rows.querySelector<HTMLTextAreaElement>('[data-role="editor"]');
     if (!editor) return;
-    editor.focus();
+    editor.focus({ preventScroll: true });
     if (caret !== undefined) editor.setSelectionRange(caret, caret);
     return;
   }
@@ -503,7 +457,11 @@ function sideAt(x: number): Side {
   return x < bounds.left + bounds.width / 2 ? "before" : "after";
 }
 
-/** Pixels at a pane's right edge that belong to its scrollbar, not its text. */
+/**
+ * The page's scrollbar, as the stylesheet draws it: a thin 8px bar sitting in
+ * the scroller's right edge. A press there is a scrollbar drag, not a click
+ * into the text.
+ */
 const SCROLLBAR_EDGE = 10;
 
 /**
@@ -537,16 +495,9 @@ function editRequest(
       return { side, caret: caretOffsetFor(side, line, event) };
     }
   }
-  if (editing !== null) {
-    // In edit mode the read-only column scrolls on its own; its scrollbar is
-    // not an edit request either.
-    const column = target.closest<HTMLElement>(".diff-column");
-    if (column) {
-      const bounds = column.getBoundingClientRect();
-      if (event.clientX > bounds.right - SCROLLBAR_EDGE) return null;
-    }
-    return { side: sideAt(event.clientX) };
-  }
+  // Both panes scroll as one page in edit mode, so anything below a line is
+  // an edit request for the side it landed on.
+  if (editing !== null) return { side: sideAt(event.clientX) };
   // The vertical scrollbar belongs to the scroller; pressing it scrolls.
   const bounds = scroller.getBoundingClientRect();
   if (event.clientX > bounds.right - SCROLLBAR_EDGE) return null;
@@ -584,6 +535,13 @@ rows.addEventListener("dblclick", (event) => {
 saveButton.addEventListener("click", () => void save());
 closeButton.addEventListener("click", () => bridge.close());
 copyButton.addEventListener("click", () => void copy());
+
+// The editor grows with its wrapped text; a narrower or wider window rewraps
+// it, so the height is measured again or the page keeps the old line's space.
+window.addEventListener("resize", () => {
+  const editor = rows.querySelector<HTMLTextAreaElement>('[data-role="editor"]');
+  if (editor) fitEditor(editor);
+});
 
 document.addEventListener("keydown", (event) => {
   const modifier = event.metaKey || event.ctrlKey;

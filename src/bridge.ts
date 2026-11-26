@@ -41,6 +41,14 @@ export interface SurfaceBridge {
   readonly delivery: SurfaceDelivery | null;
   /** Registers the one receiver for the delivery; it fires at most once. */
   onItem(listener: (delivery: SurfaceDelivery) => void): void;
+  /**
+   * True once the host mounted this page as a settings menu page (D-1234):
+   * it has no item, so the reader supplies both texts, and only the copy
+   * request is answered — save and the companion are not in that channel.
+   */
+  readonly menu: boolean;
+  /** Registers the one receiver for the menu notice; at most once. */
+  onMenu(listener: () => void): void;
   save(text: string, title: string): Promise<BridgeResult>;
   copy(text: string): Promise<BridgeResult>;
   close(): void;
@@ -48,6 +56,11 @@ export interface SurfaceBridge {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+/** The host's first message to a menu page, before the theme (D-1234). */
+function isMenuMode(data: unknown): boolean {
+  return isRecord(data) && data.v === 1 && data.type === "menu";
 }
 
 /** The application's resolved colour scheme (D-1042). */
@@ -121,6 +134,8 @@ function parseItem(data: unknown): SurfaceTextItem | null {
 export function connectSurface(): SurfaceBridge {
   let delivery: SurfaceDelivery | null = null;
   const listeners: ((delivery: SurfaceDelivery) => void)[] = [];
+  let menu = false;
+  const menuListeners: (() => void)[] = [];
   const pending = new Map<number, (result: ResultMessage) => void>();
   let nextRequest = 1;
   let delivering = false;
@@ -172,6 +187,11 @@ export function connectSurface(): SurfaceBridge {
       void deliver(item, data);
       return;
     }
+    if (isMenuMode(data)) {
+      menu = true;
+      for (const listener of menuListeners.splice(0)) listener();
+      return;
+    }
     const theme = parseTheme(data);
     if (theme) {
       applyTheme(theme);
@@ -197,6 +217,16 @@ export function connectSurface(): SurfaceBridge {
         return;
       }
       listeners.push(listener);
+    },
+    get menu() {
+      return menu;
+    },
+    onMenu(listener) {
+      if (menu) {
+        listener();
+        return;
+      }
+      menuListeners.push(listener);
     },
     async save(text, title) {
       const result = await request({ type: "save", text, title });

@@ -48,6 +48,11 @@ let afterText = "";
 let currentName = "";
 let editing: Side | null = null;
 let busy = false;
+/**
+ * A settings menu page has no entry (D-1234): both texts are the reader's,
+ * save and close are the host's, and copy is what writes the record.
+ */
+let menuMode = false;
 
 type DiffResult = ReturnType<typeof diffText>;
 
@@ -64,6 +69,12 @@ const REPAINT_INTERVAL_MAX = 600;
 let repaintInterval = REPAINT_INTERVAL;
 let repaintTimer = 0;
 let lastRepaintAt = 0;
+/**
+ * The editor's own shade, held from the moment it is drawn: it is rebuilt with
+ * every editor, so the repaint reads the element it was given instead of
+ * searching the rows for it.
+ */
+let shadeElement: HTMLElement | null = null;
 
 function setStatus(text: string, failed = false): void {
   status.textContent = text;
@@ -75,6 +86,11 @@ function cell(className: string): HTMLElement {
   const element = document.createElement("div");
   element.className = className;
   return element;
+}
+
+/** One painted line of a row, on the side it was drawn for. */
+function isSideLine(node: Element, side: Side): node is HTMLElement {
+  return node instanceof HTMLElement && node.dataset.side === side;
 }
 
 function appendSegments(target: HTMLElement, segments: DiffRow["before"]): void {
@@ -150,12 +166,56 @@ function summaryText(): string {
   return `文本 · ${languageLabel(detectLanguage(afterText))}`;
 }
 
+/** The menu page before the reader has given it anything to compare. */
+function untouched(): boolean {
+  return menuMode && beforeText.trim() === "" && afterText.trim() === "";
+}
+
+/** The status line's right side: the comparison's own count. */
+function updateStats(result: DiffResult): void {
+  stats.textContent = untouched() ? "尚未输入" : diffSummary(result);
+}
+
+/**
+ * The standalone page starts with nothing to compare: both panes offer their
+ * own prompt until the reader supplies a text or opens an editor.
+ */
+function syncEmpty(): void {
+  const empty = untouched();
+  emptyState.hidden = !empty;
+  // The side being edited keeps its column but gives the pointer back to the
+  // editor underneath it; the other prompt is still there to switch sides.
+  emptyState.dataset.editing = empty && editing !== null ? editing : "";
+}
+
 /**
  * The status line states the one thing that matters now: an empty current
  * text disables both actions, editing shows its own way out, and otherwise
  * the result's own limits are reported.
  */
 function showStatus(result: DiffResult): void {
+  if (menuMode) {
+    if (editing !== null) {
+      setStatus(
+        editing === "before"
+          ? "正在编辑对比基准 · Esc 退出"
+          : "正在编辑当前文本 · Esc 退出",
+      );
+      return;
+    }
+    if (afterText.trim() === "" && beforeText.trim() === "") {
+      setStatus("复制会把右侧记成一条新记录");
+      return;
+    }
+    if (afterText.trim() === "") {
+      setStatus("右侧还没有文本，先输入或粘贴当前文本");
+      return;
+    }
+    if (result.truncated) setStatus("文本过长，只比较了前面一部分");
+    else if (result.coarse) setStatus("改动过多，按位置配对而不是逐词对齐");
+    else setStatus("");
+    return;
+  }
   if (afterText.trim() === "") {
     setStatus("当前文本为空，无法保存或复制");
     return;
@@ -194,14 +254,20 @@ function syncPaneGutter(): void {
 /** The read-only comparison. */
 function renderView(): void {
   editing = null;
+  shadeElement = null;
   rows.classList.remove("editing");
   const result = diffText(beforeText, afterText);
   cachedResult = result;
-  stats.textContent = diffSummary(result);
+  updateStats(result);
   const fragment = document.createDocumentFragment();
-  for (const row of result.rows) fragment.append(rowElement(row));
+  // With nothing typed yet the page is still its idle state: a row of two
+  // empty lines would paint two gutters reading "1" beside no text at all.
+  if (!untouched()) {
+    for (const row of result.rows) fragment.append(rowElement(row));
+  }
   rows.replaceChildren(fragment);
   syncPaneGutter();
+  syncEmpty();
   showStatus(result);
   updateActions();
 }
@@ -216,16 +282,18 @@ function repaintEdit(): void {
   if (side === null) return;
   const result = diffText(beforeText, afterText);
   cachedResult = result;
-  stats.textContent = diffSummary(result);
+  updateStats(result);
   const column = rows.querySelector<HTMLElement>('[data-column="other"]');
   if (column) {
     column.replaceChildren(
       columnFragment(result.rows, side === "before" ? "after" : "before"),
     );
   }
-  const shade = rows.querySelector<HTMLElement>(".edit-shade");
-  if (shade) shade.replaceChildren(sideFragment(result.rows, side));
+  shadeElement?.replaceChildren(
+    sideFragment(untouched() ? [] : result.rows, side),
+  );
   syncPaneGutter();
+  syncEmpty();
   showStatus(result);
   updateActions();
 }
@@ -272,7 +340,7 @@ function renderEdit(caret?: number): void {
   const result = cachedResult ?? diffText(beforeText, afterText);
   cachedResult = result;
   repaintInterval = REPAINT_INTERVAL;
-  stats.textContent = diffSummary(result);
+  updateStats(result);
 
   const editorPane = cell("edit-side");
   editorPane.dataset.side = side;
@@ -280,7 +348,9 @@ function renderEdit(caret?: number): void {
   // rows this side had a moment ago, with their glyphs left to the textarea.
   const shade = cell("edit-shade");
   shade.setAttribute("aria-hidden", "true");
-  shade.append(sideFragment(result.rows, side));
+  const rowsToPaint = untouched() ? [] : result.rows;
+  shade.append(sideFragment(rowsToPaint, side));
+  shadeElement = shade;
   // Only the number column's width: the digits are the shade's rows, so they
   // share the text's wrapping.
   const gutter = cell("edit-gutter");
@@ -299,7 +369,11 @@ function renderEdit(caret?: number): void {
     else afterText = textarea.value;
     cachedResult = null;
     languageLabelElement.textContent = summaryText();
-    if (afterText.trim() === "") setStatus("当前文本为空，无法保存或复制");
+    if (afterText.trim() === "") {
+      setStatus(
+        menuMode ? "右侧还没有文本，先输入或粘贴当前文本" : "当前文本为空，无法保存或复制",
+      );
+    }
     updateActions();
     fitEditor(textarea);
     scheduleRepaint();
@@ -313,16 +387,22 @@ function renderEdit(caret?: number): void {
   if (rows.classList.contains("editing")) {
     // Switching sides: the column kept from the first click is missing the
     // side the editor held, so it is drawn again from the comparison on screen.
-    other.append(columnFragment(result.rows, otherSide));
+    other.append(columnFragment(rowsToPaint, otherSide));
   } else {
     // Entering edit: the read-only column keeps the exact rows it was painted
     // with. Moving them changes no colour, no mark and no line box, so the
     // click hands one column to the editor and leaves the other as it was.
     for (const rowNode of [...rows.children]) {
-      rowNode.querySelector(`.line[data-side="${side}"]`)?.remove();
-      const kept = rowNode.querySelector(".line");
-      const number = kept?.querySelector(".line-number");
-      if (kept && number && !number.classList.contains("empty")) {
+      // A row is its pair of lines; the side that went to the editor leaves
+      // with it, and the other side is what stays, identified by its own
+      // `data-side` rather than by a class the stylesheet also owns.
+      const lines = Array.from(rowNode.children);
+      lines.find((node) => isSideLine(node, side))?.remove();
+      const kept = lines.find((node): node is HTMLElement => isSideLine(node, otherSide));
+      // A side with no line of its own on this row would leave a groove in the
+      // read-only column, so the row is dropped rather than half drawn.
+      const gutter = kept?.firstElementChild;
+      if (kept && gutter && !gutter.classList.contains("empty")) {
         other.append(rowNode);
       } else {
         rowNode.remove();
@@ -358,6 +438,7 @@ function beginEdit(side: Side, caret?: number): void {
   }
   editing = side;
   renderEdit(caret);
+  syncEmpty();
 }
 
 /** Character offset at which each line of a text starts. */
@@ -470,6 +551,8 @@ async function run(action: () => Promise<void>): Promise<void> {
 
 function save(): Promise<void> {
   return run(async () => {
+    // The menu channel has no save (D-1234); copy is the only way out there.
+    if (menuMode) return;
     if (afterText.trim() === "") {
       showStatus(diffText(beforeText, afterText));
       return;
@@ -495,7 +578,10 @@ function copy(): Promise<void> {
     }
     setStatus("正在复制…");
     const result = await bridge.copy(afterText);
-    setStatus(result.ok ? "已复制当前文本" : (result.message || "复制失败"), !result.ok);
+    // A menu page's copy is also the record (D-1234): it is the only way a
+    // standalone comparison enters the clipboard history.
+    const done = menuMode ? "已复制当前文本，并记成一条新记录" : "已复制当前文本";
+    setStatus(result.ok ? done : (result.message || "复制失败"), !result.ok);
   });
 }
 
@@ -530,6 +616,13 @@ function editRequest(
     || target.closest(".doc-head")
   ) {
     return null;
+  }
+  // The standalone page's two prompts are buttons, so a keyboard activation
+  // (which carries no pointer position) still opens the side it names.
+  const prompt = target.closest<HTMLElement>(".empty-side");
+  if (prompt) {
+    const side = prompt.dataset.side;
+    return side === "before" || side === "after" ? { side } : null;
   }
   const head = target.closest<HTMLElement>(".pane-head");
   if (head) {
@@ -596,7 +689,8 @@ document.addEventListener("keydown", (event) => {
   const modifier = event.metaKey || event.ctrlKey;
   if (modifier && (event.key === "Enter" || event.key === "s")) {
     event.preventDefault();
-    if (!saveButton.disabled) void save();
+    // A menu page has no save; only the surface owns that chord.
+    if (!menuMode && !saveButton.disabled) void save();
     return;
   }
   if (event.key === "Escape") {
@@ -606,8 +700,23 @@ document.addEventListener("keydown", (event) => {
       exitEdit();
       return;
     }
-    bridge.close();
+    // The host's tab closes a settings page (D-1234); the page owns no X.
+    if (!menuMode) bridge.close();
   }
 });
 
 bridge.onItem(render);
+
+/**
+ * A menu page has no entry (D-1234): the reader supplies both texts, the head
+ * names the tool instead of an item, and the two prompts stand in for the
+ * missing delivery. The status line says what copy will do.
+ */
+bridge.onMenu(() => {
+  menuMode = true;
+  document.body.dataset.mode = "menu";
+  currentTitle.textContent = "高亮对比";
+  companionTitle.textContent = "对比基准";
+  languageLabelElement.textContent = "独立对比";
+  renderView();
+});

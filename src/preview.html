@@ -14,13 +14,11 @@
      */
     --bg: var(--mp-surface-solid, #f3ece1);
     --solid: var(--mp-surface-solid, #f3ece1);
-    --surface: var(--mp-surface-raised, #fbf7f0);
     --ink: var(--mp-ink, #2f261e);
     --muted: var(--mp-ink-soft, #8b7c6a);
     --line: var(--mp-line, rgba(70, 48, 26, 0.14));
     --accent: var(--mp-accent, #a65d2e);
     --accent-ink: var(--mp-accent-ink, #fff8ef);
-    --focus: color-mix(in srgb, var(--mp-accent, #a65d2e) 35%, transparent);
     /* A changed line wears its own side's colour, and a changed word wears a
        stronger wash of the same one: the two never borrow the accent, so the
        red/green reading of a diff survives any theme. */
@@ -47,13 +45,11 @@
     color-scheme: dark;
     --bg: var(--mp-surface-solid, #171412);
     --solid: var(--mp-surface-solid, #171412);
-    --surface: var(--mp-surface-raised, #201c18);
     --ink: var(--mp-ink, #f0e6d9);
     --muted: var(--mp-ink-soft, #9a8c7b);
     --line: var(--mp-line, rgba(255, 236, 214, 0.12));
     --accent: var(--mp-accent, #e2955f);
     --accent-ink: var(--mp-accent-ink, #241a12);
-    --focus: color-mix(in srgb, var(--mp-accent, #e2955f) 35%, transparent);
     --added: color-mix(in srgb, var(--mp-success, #93b277) 30%, transparent);
     --removed: color-mix(in srgb, var(--mp-danger, #d58a68) 26%, transparent);
     --added-mark: color-mix(in srgb, var(--mp-success, #93b277) 50%, transparent);
@@ -77,45 +73,36 @@
   }
 
   /*
-   * The document header, shared with the code editor. The page owns the whole
-   * card now (D-1097), so this is one 44px band instead of a strip holding an
-   * empty tab: the title sits at the left with an accent rule beneath it, and
-   * the format label joins the page's actions at the right, all of them 28px
-   * high so the row has a single size (D-1051). Closing is set apart by a
-   * hairline and is the only control the page does not tint.
+   * The page is one sheet: one header, then the comparison, then the status
+   * line, with no card floating inside the page. The chrome is the sheet — the
+   * head, the pane labels and the status line carry no fill of their own, so a
+   * hairline is the only thing that marks where they end. A raised ground here
+   * would put a bright plate across the top and bottom of every comparison.
+   *
+   * The head names the entry at the left and keeps the page's actions at the
+   * right, all of them 28px high so the row has a single size (D-1051).
+   * Closing is set apart by a hairline and is the only control the page does
+   * not tint.
    */
   .doc-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    height: 44px;
-    padding: 0 12px 0 16px;
+    height: 46px;
+    padding: 0 14px 0 16px;
     border-bottom: 1px solid var(--line);
-    background: var(--surface);
   }
   .doc-id {
-    position: relative;
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
-    height: 100%;
-    padding-right: 8px;
-  }
-  .doc-id::after {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 2px;
-    background: var(--accent);
   }
   .doc-icon { width: 15px; height: 15px; flex: none; color: var(--muted); }
   .doc-title {
     min-width: 0;
-    max-width: 46vw;
+    max-width: 40vw;
     overflow: hidden;
     font: 600 13px/1.4 var(--mp-font-body, -apple-system, "PingFang SC", "Hiragino Sans GB", sans-serif);
     text-overflow: ellipsis;
@@ -184,6 +171,10 @@
     box-shadow: inset 0 0 0 1px var(--accent);
   }
 
+  /*
+   * The two slim labels that keep the columns named. They sit on the sheet,
+   * not on a band of their own: the hairline below them is the only mark.
+   */
   .pane-heads {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -191,13 +182,13 @@
        onto --pane-gutter so the two halves meet on the same vertical line. */
     padding-right: var(--pane-gutter, 0px);
     border-bottom: 1px solid var(--line);
-    background: var(--surface);
   }
   .pane-head {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 6px;
-    padding: 8px 12px;
+    min-height: 34px;
+    padding: 4px 8px 4px 16px;
     color: var(--muted);
     font-size: 11px;
     white-space: nowrap;
@@ -208,7 +199,6 @@
   .pane-head strong {
     overflow: hidden;
     color: var(--ink);
-    font-family: var(--mp-font-display, "New York", "Songti SC", Georgia, serif);
     font-size: 12px;
     font-weight: 600;
     text-overflow: ellipsis;
@@ -220,7 +210,10 @@
     /* The bar's width is always reserved, so the divider never shifts when a
        short document grows past the viewport. */
     scrollbar-gutter: stable;
-    background: var(--surface);
+    /* The rows are the page's own body, so they take the sheet's ground
+       rather than a raised plate of their own. */
+    position: relative;
+    background: var(--solid);
   }
   /* A click anywhere in a pane opens its editor, not only on the text. */
   .scroller { cursor: text; }
@@ -296,11 +289,64 @@
      the width it will have in the editor that replaces this column. */
   .line.before .diff-mark { background: var(--removed-mark); color: var(--removed-ink); }
   .line.after .diff-mark { background: var(--added-mark); color: var(--added-ink); }
+  /*
+   * The standalone page starts with nothing to compare: each column offers its
+   * own prompt, a button that opens that side's editor. The pair sits on the
+   * same two columns as the rows, so the page already has the shape of the
+   * comparison before it holds one word.
+   */
   .empty-state {
-    padding: 28px 18px;
-    color: var(--muted);
-    font-size: 12px;
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    /* Only the prompts take clicks: the rest of the overlay stays transparent
+       to the pointer, so the editor underneath keeps the caret and the
+       scroller keeps its scrollbar. */
+    pointer-events: none;
   }
+  /* The same divider the rows draw, so the prompts line up with the columns
+     that will replace them. */
+  .empty-state::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    background: var(--line);
+  }
+  .empty-state[hidden] { display: none; }
+  /* The side being edited keeps its cell but not its prompt: the editor under
+     it takes the click, and the other prompt still switches sides. */
+  .empty-state[data-editing="before"] [data-side="before"],
+  .empty-state[data-editing="after"] [data-side="after"] { visibility: hidden; }
+  /* The prompt is the label block, not the whole column: a focus ring around
+     the column would read as a card laid over the page, and the column itself
+     stays clickable through the overlay anyway. */
+  .empty-side {
+    display: grid;
+    justify-items: center;
+    gap: 4px;
+    place-self: center;
+    max-width: calc(100% - 32px);
+    padding: 14px 24px;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    text-align: center;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.6;
+    pointer-events: auto;
+  }
+  .empty-side:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+  .empty-side:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .empty-title { color: var(--ink); font-size: 13px; font-weight: 600; }
+  .empty-note { max-width: 22em; text-wrap: balance; }
 
   /*
    * Edit mode (one click on either side). The clicked side keeps the page's
@@ -388,9 +434,8 @@
     justify-content: space-between;
     gap: 12px;
     min-height: 26px;
-    padding: 4px 12px;
+    padding: 4px 16px;
     border-top: 1px solid var(--line);
-    background: var(--surface);
     color: var(--muted);
     font: 11px/1.4 var(--mono);
   }
@@ -417,6 +462,16 @@
   #diff-status[hidden] { display: none; }
 
   /*
+   * A menu page (host D-1234) has no entry behind it and no host tab to close:
+   * the reader supplies both texts, and copying the right side is the record
+   * it writes. Saving a new entry is the surface's own action, so it leaves
+   * with the close control; the host owns the tab.
+   */
+  body[data-mode="menu"] [data-action="save"],
+  body[data-mode="menu"] .doc-sep,
+  body[data-mode="menu"] .doc-close { display: none; }
+
+  /*
    * Corner system (host D-1099): one ladder, so every box answers with the
    * same family. A mark is 4px, a control 6px, a card or popover 10px, a
    * floating dialog 14px, and an indicator or scrollbar is a capsule.
@@ -430,9 +485,6 @@
   }
   button {
     border-radius: var(--radius-sm);
-  }
-  .doc-id::after {
-    border-radius: var(--radius-pill);
   }
 </style>
 </head>
@@ -479,7 +531,16 @@
   </div>
   <div class="scroller" id="diff-scroller">
     <div class="rows" id="diff-rows"></div>
-    <p class="empty-state" id="diff-empty" hidden>等一等，宿主正在交付两条文本。</p>
+    <div class="empty-state" id="diff-empty" hidden>
+      <button type="button" class="empty-side" data-side="before">
+        <span class="empty-title">对比基准</span>
+        <span class="empty-note">点这里输入或粘贴参照的文本</span>
+      </button>
+      <button type="button" class="empty-side" data-side="after">
+        <span class="empty-title">当前文本</span>
+        <span class="empty-note">点这里输入或粘贴要对照的文本</span>
+      </button>
+    </div>
   </div>
   <footer class="statusbar">
     <span id="diff-status" role="status" aria-live="polite" hidden></span>

@@ -1,8 +1,8 @@
 # 高亮对比
 
-MyPaste extension `com.mypaste.diff-view` (version `3.3.3`).
+MyPaste extension `com.mypaste.diff-view` (version `3.4.0`).
 
-把这条文本与屏幕上相邻的一条文本逐行对照：先对齐整行，再只标出真正改动的词。对比在本机完成，不联网；除本次条目外只读相邻的一条文本。
+把这条文本与屏幕上相邻的一条文本逐行对照：先对齐整行，再只标出真正改动的词。也可以从设置里单独打开，两侧都由自己输入。对比在本机完成，不联网；作为条目打开时只读相邻的一条文本。
 
 This repository is an independent copy extracted from the former `mypaste-code-extensions` monorepo at commit `2af6675ab1473c9e38146ea0b6da68256a293440`. It contains only this extension's tracked source files. The published `.mypaste-plugin` archives and marketplace index live in [`mypaste-extensions-catalog`](https://github.com/mypaste/mypaste-extensions-catalog).
 

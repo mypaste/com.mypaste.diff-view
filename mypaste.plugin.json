@@ -2,9 +2,9 @@
   "manifestVersion": 3,
   "id": "com.mypaste.diff-view",
   "name": "高亮对比",
-  "version": "3.4.1",
+  "version": "3.4.3",
   "kind": "ui",
-  "description": "把这条文本与屏幕上相邻的一条文本逐行对照：先对齐整行，再只标出真正改动的词。也可以从设置里单独打开，两侧都由自己输入。对比在本机完成，不联网；作为条目打开时只读相邻的一条文本。",
+  "description": "把这条文本与屏幕上相邻的一条文本逐行对照：先对齐整行，再只标出真正改动的词。也可以从设置里单独打开，两侧都由自己输入；剪切坞的快捷键把它开成独立窗口，并带入当前选中的记录。对比在本机完成，不联网；作为条目打开时只读相邻的一条文本。",
   "capabilities": [
     "entity.read",
     "entity.save",
@@ -17,8 +17,7 @@
       "text"
     ],
     "role": "open",
-    "chrome": "page",
-    "shortcut": "Ctrl+Alt+D"
+    "chrome": "page"
   },
   "menus": [
     {
@@ -26,7 +25,8 @@
       "title": "高亮对比",
       "entry": "preview.html",
       "icon": "code",
-      "order": 67
+      "order": 67,
+      "panelShortcut": "Ctrl+Alt+D"
     }
   ],
   "commands": [

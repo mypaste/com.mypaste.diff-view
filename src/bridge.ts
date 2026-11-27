@@ -14,6 +14,11 @@
  * D-1042/D-1043: the host also sends the application's resolved colour scheme
  * and the design tokens that scheme resolved to; the document paints by them
  * instead of by the system's appearance or a palette of its own.
+ *
+ * D-1252: the page's working state crosses a detach through the host. A detach
+ * asks this document for it through one message, answered with the standard
+ * result; a window opened with a draft delivers it right after the menu
+ * notice. The bridge carries the value; the document decides what it means.
  */
 
 export type SurfaceTextItem = { kind: "text"; title: string; text: string };
@@ -49,6 +54,19 @@ export interface SurfaceBridge {
   readonly menu: boolean;
   /** Registers the one receiver for the menu notice; at most once. */
   onMenu(listener: () => void): void;
+  /**
+   * Registers where this page's working state comes from (D-1252): a detach
+   * asks for it through one draft message, and the page answers with the
+   * channel's standard result carrying the value. The bridge carries the
+   * value; what it means is the page's business.
+   */
+  setDraftProvider(provider: (() => unknown) | null): void;
+  /**
+   * Registers the one receiver for the draft a detach carried into this
+   * window (D-1252). The host delivers it once, right after the menu notice,
+   * and a late receiver still learns what was carried.
+   */
+  onDraft(listener: (draft: unknown) => void): void;
   save(text: string, title: string): Promise<BridgeResult>;
   copy(text: string): Promise<BridgeResult>;
   close(): void;
@@ -61,6 +79,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** The host's first message to a menu page, before the theme (D-1234). */
 function isMenuMode(data: unknown): boolean {
   return isRecord(data) && data.v === 1 && data.type === "menu";
+}
+
+/**
+ * The host asks a mounted page for its working state before a detach opens the
+ * menu's window (D-1252). The page answers with the channel's standard result,
+ * so the ask and every other request use one reply shape.
+ */
+function isDraftAsk(data: unknown): data is { v: 1; type: "draft"; requestId: number } {
+  return isRecord(data) && data.v === 1 && data.type === "draft" &&
+    typeof data.requestId === "number";
+}
+
+/**
+ * The host hands a window's page the draft a detach carried in, right after
+ * the menu notice (D-1252): the page knows it is a menu page before it
+ * applies the state that is being handed to it.
+ */
+function isDraftDelivery(data: unknown): data is {
+  v: 1; type: "draft"; value: unknown;
+} {
+  return isRecord(data) && data.v === 1 && data.type === "draft" && "value" in data;
 }
 
 /** The application's resolved colour scheme (D-1042). */
@@ -139,6 +178,13 @@ export function connectSurface(): SurfaceBridge {
   const pending = new Map<number, (result: ResultMessage) => void>();
   let nextRequest = 1;
   let delivering = false;
+  // Draft carries (D-1252): where the page's working state comes from, the
+  // receivers for a draft a detach carried in, and the last one for a receiver
+  // that registered after the delivery landed.
+  let draftProvider: (() => unknown) | null = null;
+  const draftListeners: ((draft: unknown) => void)[] = [];
+  let carriedDraft: unknown = null;
+  let draftDelivered = false;
 
   function post(message: unknown): void {
     parent.postMessage(message, "*");
@@ -157,6 +203,11 @@ export function connectSurface(): SurfaceBridge {
    * keeps working; otherwise the page asks for it through `companion.read`.
    * A malformed pushed companion makes the pair unusable rather than half a
    * comparison, exactly as v2 refused it.
+   *
+   * A menu window may carry one entry and nothing to compare it with (D-1255):
+   * that channel has no `companion` request at all, so asking would wait for an
+   * answer the host never sends. The delivery there keeps the companion null
+   * and the reader supplies the other side, as the menu page already expects.
    */
   async function deliver(item: SurfaceTextItem, message: unknown): Promise<void> {
     if (delivering) return;
@@ -166,6 +217,8 @@ export function connectSurface(): SurfaceBridge {
     if (pushed !== undefined) {
       companion = parseTextItem(pushed);
       if (!companion) return;
+    } else if (menu) {
+      companion = null;
     } else {
       const result = await request({ type: "companion" });
       companion = result.ok ? parseTextItem(result.item) : null;
@@ -190,6 +243,22 @@ export function connectSurface(): SurfaceBridge {
     if (isMenuMode(data)) {
       menu = true;
       for (const listener of menuListeners.splice(0)) listener();
+      return;
+    }
+    if (isDraftAsk(data)) {
+      // A detach asked for this page's working state (D-1252). The channel's
+      // standard result is the answer, so the ask needs no new reply shape; a
+      // page with no provider answers with nothing carried.
+      post({
+        v: 1, type: "result", requestId: data.requestId, ok: true,
+        value: draftProvider ? draftProvider() : null,
+      });
+      return;
+    }
+    if (isDraftDelivery(data)) {
+      carriedDraft = data.value;
+      draftDelivered = true;
+      for (const listener of draftListeners.splice(0)) listener(data.value);
       return;
     }
     const theme = parseTheme(data);
@@ -227,6 +296,18 @@ export function connectSurface(): SurfaceBridge {
         return;
       }
       menuListeners.push(listener);
+    },
+    setDraftProvider(provider) {
+      draftProvider = provider;
+    },
+    onDraft(listener) {
+      // A page that registers after the delivery landed still learns what was
+      // carried, the same way a late item or menu listener does.
+      if (draftDelivered) {
+        listener(carriedDraft);
+        return;
+      }
+      draftListeners.push(listener);
     },
     async save(text, title) {
       const result = await request({ type: "save", text, title });

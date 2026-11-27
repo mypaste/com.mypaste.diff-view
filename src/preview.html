@@ -321,6 +321,10 @@
      it takes the click, and the other prompt still switches sides. */
   .empty-state[data-editing="before"] [data-side="before"],
   .empty-state[data-editing="after"] [data-side="after"] { visibility: hidden; }
+  /* A menu window that carried a record (D-1255) keeps the prompt only on the
+     side still waiting for the reader's text. */
+  .empty-state[data-filled="before"] [data-side="before"],
+  .empty-state[data-filled="after"] [data-side="after"] { visibility: hidden; }
   /* The prompt is the label block, not the whole column: a focus ring around
      the column would read as a card laid over the page, and the column itself
      stays clickable through the overlay anyway. */

@@ -49,8 +49,10 @@ let currentName = "";
 let editing: Side | null = null;
 let busy = false;
 /**
- * A settings menu page has no entry (D-1234): both texts are the reader's,
- * save and close are the host's, and copy is what writes the record.
+ * A settings menu page has no entry of its own (D-1234): save and close are
+ * the host's and copy is what writes the record. The dock's chord can open
+ * this same page with the record it was pressed on (D-1255); that record is
+ * the current text and the reader supplies the baseline.
  */
 let menuMode = false;
 
@@ -178,14 +180,20 @@ function updateStats(result: DiffResult): void {
 
 /**
  * The standalone page starts with nothing to compare: both panes offer their
- * own prompt until the reader supplies a text or opens an editor.
+ * own prompt until the reader supplies a text or opens an editor. A menu
+ * window that carried a record (D-1255) already holds the current side, so
+ * only the empty side keeps its prompt.
  */
 function syncEmpty(): void {
-  const empty = untouched();
-  emptyState.hidden = !empty;
+  const beforeEmpty = beforeText.trim() === "";
+  const afterEmpty = afterText.trim() === "";
+  const show = menuMode && (beforeEmpty || afterEmpty);
+  emptyState.hidden = !show;
+  emptyState.dataset.filled =
+    !show ? "" : !beforeEmpty ? "before" : !afterEmpty ? "after" : "";
   // The side being edited keeps its column but gives the pointer back to the
   // editor underneath it; the other prompt is still there to switch sides.
-  emptyState.dataset.editing = empty && editing !== null ? editing : "";
+  emptyState.dataset.editing = show && editing !== null ? editing : "";
 }
 
 /**
@@ -209,6 +217,13 @@ function showStatus(result: DiffResult): void {
     }
     if (afterText.trim() === "") {
       setStatus("右侧还没有文本，先输入或粘贴当前文本");
+      return;
+    }
+    if (beforeText.trim() === "") {
+      // The dock's chord carried the record in (D-1255); the other side is
+      // the reader's to supply, so say where it goes instead of leaving the
+      // page silent with half a comparison on screen.
+      setStatus("已带入当前记录 · 点左侧输入对照文本");
       return;
     }
     if (result.truncated) setStatus("文本过长，只比较了前面一部分");
@@ -520,19 +535,23 @@ function exitEdit(): void {
 
 function render(delivery: SurfaceDelivery): void {
   const companion = delivery.companion;
-  if (!companion) {
+  if (!companion && !menuMode) {
     // The host refuses before opening a document whose manifest asked for a
     // comparison; this guard covers a delivery that lost its pair.
     setStatus("历史里还需要另一条文本才能对比", true);
     updateActions();
     return;
   }
-  beforeText = companion.text;
+  // A menu window opened by the dock's chord carries the record it was pressed
+  // on and nothing else (D-1255): that record is the current text, and the
+  // reader supplies the comparison baseline, as on an untouched menu page.
+  beforeText = companion?.text ?? "";
   afterText = delivery.item.text;
   currentName = delivery.item.title;
-  emptyState.hidden = true;
   currentTitle.textContent = currentName || "当前条目";
-  companionTitle.textContent = companion.title || "相邻条目";
+  companionTitle.textContent = companion
+    ? companion.title || "相邻条目"
+    : "对比基准";
   languageLabelElement.textContent = summaryText();
   renderView();
 }
@@ -718,5 +737,29 @@ bridge.onMenu(() => {
   currentTitle.textContent = "高亮对比";
   companionTitle.textContent = "对比基准";
   languageLabelElement.textContent = "独立对比";
+  renderView();
+});
+
+/**
+ * D-1252: the two texts are this page's working state, so a detach (Cmd+D)
+ * asks for them and a window opened with them hands them back. The page
+ * answers from its own state and applies a delivered draft exactly as it
+ * applies its own typing, so the second view of the menu starts with what the
+ * first one already had.
+ */
+bridge.setDraftProvider(() => ({ before: beforeText, after: afterText }));
+
+bridge.onDraft((draft) => {
+  const carried = draft as { before?: unknown; after?: unknown } | null;
+  // The host carries the draft, it does not interpret it: a value with no two
+  // texts on it is nothing to render.
+  if (
+    carried === null || typeof carried !== "object" ||
+    typeof carried.before !== "string" || typeof carried.after !== "string"
+  ) {
+    return;
+  }
+  beforeText = carried.before;
+  afterText = carried.after;
   renderView();
 });
